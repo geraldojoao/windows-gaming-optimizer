@@ -1,0 +1,25 @@
+# Runtime logs and local backups
+*.log
+OtimizadorFPS_log.txt
+OtimizadorFPS_backup.json
+OtimizadorFPS_profile.json
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# PowerShell
+*.ps1xml
+*.pssc
+*.psd1.bak
+
+# Editors
+.vscode/
+.idea/
+
+# Build/release output
+dist/
+build/
+release/
+*.zip
