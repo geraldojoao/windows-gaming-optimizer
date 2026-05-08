@@ -24,7 +24,6 @@ $ErrorActionPreference = 'SilentlyContinue'
 $Script:VERSION    = '2.0'
 $Script:LOG_FILE   = "$env:USERPROFILE\Documents\OtimizadorFPS_log.txt"
 $Script:PROFILE_FILE = "$env:USERPROFILE\Documents\OtimizadorFPS_profile.json"
-$Script:BACKUP_FILE  = "$env:USERPROFILE\Documents\OtimizadorFPS_backup.json"
 $Script:Backup     = @{}
 $Script:BenchScore = $null   # Score pré-otimização para comparação
 
@@ -99,103 +98,6 @@ function Write-Log {
 
 function Show-LogPath {
     Write-INFO "Log salvo em: $Script:LOG_FILE"
-}
-
-function Save-BackupState {
-    try {
-        $dir = Split-Path -Path $Script:BACKUP_FILE -Parent
-        if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
-
-        $entries = foreach ($key in $Script:Backup.Keys) {
-            $entry = $Script:Backup[$key]
-            [PSCustomObject]@{
-                Key     = $key
-                Path    = [string]$entry.Path
-                Name    = [string]$entry.Name
-                Value   = $entry.Value
-                Existed = [bool]$entry.Existed
-                Kind    = [string]$entry.Kind
-            }
-        }
-
-        $payload = [PSCustomObject]@{
-            Version = $Script:VERSION
-            SavedAt = (Get-Date).ToString('o')
-            Entries = @($entries)
-        }
-
-        $payload | ConvertTo-Json -Depth 6 | Set-Content -Path $Script:BACKUP_FILE -Encoding UTF8
-    } catch {
-        Write-Log "WARN Backup persistente falhou: $_"
-    }
-}
-
-function Load-BackupState {
-    $Script:Backup = @{}
-
-    if (-not (Test-Path $Script:BACKUP_FILE)) { return }
-
-    try {
-        $payload = Get-Content -Path $Script:BACKUP_FILE -Raw -ErrorAction Stop | ConvertFrom-Json
-        foreach ($entry in @($payload.Entries)) {
-            if (-not $entry.Key) { continue }
-            $Script:Backup[[string]$entry.Key] = @{
-                Path    = [string]$entry.Path
-                Name    = [string]$entry.Name
-                Value   = $entry.Value
-                Existed = [bool]$entry.Existed
-                Kind    = [string]$entry.Kind
-            }
-        }
-
-        if ($Script:Backup.Count -gt 0) {
-            Write-Log "BACKUP: $($Script:Backup.Count) valores carregados de $Script:BACKUP_FILE"
-        }
-    } catch {
-        Write-Log "WARN Backup persistente invalido: $_"
-        $Script:Backup = @{}
-    }
-}
-
-function Clear-BackupState {
-    $Script:Backup = @{}
-    Remove-Item -Path $Script:BACKUP_FILE -Force -ErrorAction SilentlyContinue
-}
-
-function ConvertTo-RegistryValueKind {
-    param([string]$Type = 'DWord')
-
-    switch ($Type) {
-        'String'       { return [Microsoft.Win32.RegistryValueKind]::String }
-        'ExpandString' { return [Microsoft.Win32.RegistryValueKind]::ExpandString }
-        'DWord'        { return [Microsoft.Win32.RegistryValueKind]::DWord }
-        'QWord'        { return [Microsoft.Win32.RegistryValueKind]::QWord }
-        'MultiString'  { return [Microsoft.Win32.RegistryValueKind]::MultiString }
-        'Binary'       { return [Microsoft.Win32.RegistryValueKind]::Binary }
-        default        { return [Microsoft.Win32.RegistryValueKind]::DWord }
-    }
-}
-
-function Set-RegistryValue {
-    param(
-        [string]$Path,
-        [string]$Name,
-        $Value,
-        [string]$Type = 'DWord'
-    )
-
-    if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
-
-    $kind = ConvertTo-RegistryValueKind -Type $Type
-    $normalizedValue = switch ($kind) {
-        ([Microsoft.Win32.RegistryValueKind]::DWord)       { [int]$Value; break }
-        ([Microsoft.Win32.RegistryValueKind]::QWord)       { [long]$Value; break }
-        ([Microsoft.Win32.RegistryValueKind]::MultiString) { [string[]]$Value; break }
-        ([Microsoft.Win32.RegistryValueKind]::Binary)      { [byte[]]$Value; break }
-        default                                            { $Value }
-    }
-    $key = Get-Item -Path $Path -ErrorAction Stop
-    $key.SetValue($Name, $normalizedValue, $kind)
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -376,7 +278,7 @@ function Show-SystemInfo {
         $vbsEnabled = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -ErrorAction SilentlyContinue).EnableVirtualizationBasedSecurity
         if ($vbsEnabled -eq 1) {
             Write-Host ""
-            Write-WARN "VBS/HVCI ATIVO — pode reduzir FPS em 5-15%  (opção 11 para desativar)"
+            Write-WARN "VBS/HVCI ATIVO — pode reduzir FPS em 5-15%  (opção 9 para desativar)"
         }
     }
 
@@ -409,7 +311,6 @@ function Backup-RegValue {
             Kind    = 'DWord'
         }
     }
-    Save-BackupState
 }
 
 function Set-RegSafe {
@@ -421,7 +322,8 @@ function Set-RegSafe {
     )
     Backup-RegValue -Path $Path -Name $Name
     try {
-        Set-RegistryValue -Path $Path -Name $Name -Value $Value -Type $Type
+        if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+        Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force
         return $true
     } catch {
         Write-WARN "Falha ao escrever $Path\$Name — $_"
@@ -480,7 +382,7 @@ function Disable-SysMain {
         $svc     = Get-Service -Name 'SysMain' -ErrorAction Stop
         $svcPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain'
         Backup-RegValue -Path $svcPath -Name 'Start'
-        Set-RegistryValue -Path $svcPath -Name 'Start' -Value 4 -Type DWord
+        Set-ItemProperty -Path $svcPath -Name 'Start' -Value 4 -Type DWord -Force
 
         if ($svc.Status -eq 'Running') {
             Stop-Service -Name 'SysMain' -Force -ErrorAction SilentlyContinue
@@ -625,7 +527,7 @@ function Set-ExtraOptimizations {
         $diagPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\DiagTrack'
         if (Test-Path $diagPath) {
             Backup-RegValue -Path $diagPath -Name 'Start'
-            Set-RegistryValue -Path $diagPath -Name 'Start' -Value 4 -Type DWord
+            Set-ItemProperty -Path $diagPath -Name 'Start' -Value 4 -Type DWord -Force
             Stop-Service -Name 'DiagTrack' -Force -ErrorAction SilentlyContinue
             Write-OK "DiagTrack (telemetria) → DESATIVADO"
         }
@@ -642,8 +544,8 @@ function Set-ExtraOptimizations {
             if ($ip -and $ip -notmatch '^0\.' -and $ip -ne '') {
                 Backup-RegValue -Path $nic.PSPath -Name 'TcpAckFrequency'
                 Backup-RegValue -Path $nic.PSPath -Name 'TCPNoDelay'
-                Set-RegistryValue -Path $nic.PSPath -Name 'TcpAckFrequency' -Value 1 -Type DWord
-                Set-RegistryValue -Path $nic.PSPath -Name 'TCPNoDelay'      -Value 1 -Type DWord
+                Set-ItemProperty -Path $nic.PSPath -Name 'TcpAckFrequency' -Value 1 -Type DWord -Force
+                Set-ItemProperty -Path $nic.PSPath -Name 'TCPNoDelay'      -Value 1 -Type DWord -Force
                 $count++
             }
         }
@@ -1114,7 +1016,7 @@ function Invoke-AllOptimizations {
     try {
         Enable-ComputerRestore -Drive 'C:\' -ErrorAction SilentlyContinue
         $srKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
-        Set-RegistryValue -Path $srKey -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type DWord
+        Set-ItemProperty -Path $srKey -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
         Checkpoint-Computer -Description "OtimizadorFPS v2 — Pre-Optimization $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
         Write-OK "Ponto de restauração criado com sucesso"
     } catch {
@@ -1176,7 +1078,7 @@ function Invoke-RestoreDefaults {
                     default        { 'DWord' }
                 }
                 if (-not (Test-Path $entry.Path)) { New-Item -Path $entry.Path -Force | Out-Null }
-                Set-RegistryValue -Path $entry.Path -Name $entry.Name -Value $entry.Value -Type $kind
+                Set-ItemProperty -Path $entry.Path -Name $entry.Name -Value $entry.Value -Type $kind -Force
                 Write-OK "Restaurado: ...\$($entry.Name) = $($entry.Value)"
             }
             $ok++
@@ -1192,7 +1094,7 @@ function Invoke-RestoreDefaults {
         try {
             $svcPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$svcName"
             if (Test-Path $svcPath) {
-                Set-RegistryValue -Path $svcPath -Name 'Start' -Value 2 -Type DWord
+                Set-ItemProperty -Path $svcPath -Name 'Start' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
                 Start-Service -Name $svcName -ErrorAction SilentlyContinue
                 Write-OK "$svcName → REATIVADO"
             }
@@ -1218,10 +1120,8 @@ function Invoke-RestoreDefaults {
     Write-Host ""
     if ($fail -eq 0) {
         Write-Color "  ✅  Restauração completa — $ok valores revertidos" -FG Green
-        Clear-BackupState
     } else {
         Write-Color "  ⚠  Restauração parcial — $ok OK | $fail falhas" -FG Yellow
-        Save-BackupState
     }
     Write-INFO "Reiniciar o PC é recomendado para efeito completo"
     Write-Log "RESTORE: $ok revertidos, $fail falhas"
@@ -1284,7 +1184,7 @@ function Show-Menu {
 
 function Start-MainLoop {
     Assert-Admin
-    Load-BackupState
+    $Script:Backup = @{}
 
     # Registra score inicial automaticamente
     $Script:BenchScore = (Get-OptimizationScore).Score
@@ -1376,4 +1276,3 @@ Write-Color "  Verificando privilégios..." -FG DarkGray
 Start-Sleep -Milliseconds 600
 
 Start-MainLoop
-
