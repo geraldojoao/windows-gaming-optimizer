@@ -1,10 +1,11 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    OtimizadorFPS v2.0 — Windows Gaming Optimizer
+    OtimizadorFPS v2.1.0 — Windows Gaming Optimizer
 .DESCRIPTION
-    Menu-driven optimization tool for maximum FPS, minimum input lag and
-    frametime stability. All changes are safe and fully reversible.
+    Menu-driven Windows gaming tuning tool focused on measurable configuration,
+    possible input-lag reduction and frametime stability. Changes are designed
+    with backup and rollback, but system tweaks still require care.
     New in v2.0: Timer resolution, disk tweaks, GPU vendor detection,
     Windows 11 VBS/HVCI check, profiles, persistent log, benchmark score.
 .NOTES
@@ -21,9 +22,10 @@ $ErrorActionPreference = 'SilentlyContinue'
 #  REGION: CONSTANTS
 # ─────────────────────────────────────────────────────────────
 
-$Script:VERSION    = '2.0'
+$Script:VERSION    = '2.1.0'
 $Script:LOG_FILE   = "$env:USERPROFILE\Documents\OtimizadorFPS_log.txt"
 $Script:PROFILE_FILE = "$env:USERPROFILE\Documents\OtimizadorFPS_profile.json"
+$Script:BACKUP_FILE = "$env:USERPROFILE\Documents\OtimizadorFPS_backup.json"
 $Script:Backup     = @{}
 $Script:BenchScore = $null   # Score pré-otimização para comparação
 
@@ -99,6 +101,13 @@ function Write-Log {
 function Show-LogPath {
     Write-INFO "Log salvo em: $Script:LOG_FILE"
 }
+
+# ─────────────────────────────────────────────────────────────
+#  REGION: CORE MODULES
+# ─────────────────────────────────────────────────────────────
+
+. (Join-Path $PSScriptRoot 'src\Core\Backup.ps1')
+. (Join-Path $PSScriptRoot 'src\Core\Registry.ps1')
 
 # ─────────────────────────────────────────────────────────────
 #  REGION: ADMIN GUARD
@@ -278,57 +287,11 @@ function Show-SystemInfo {
         $vbsEnabled = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -ErrorAction SilentlyContinue).EnableVirtualizationBasedSecurity
         if ($vbsEnabled -eq 1) {
             Write-Host ""
-            Write-WARN "VBS/HVCI ATIVO — pode reduzir FPS em 5-15%  (opção 9 para desativar)"
+            Write-WARN "VBS/HVCI ATIVO — pode afetar desempenho em alguns PCs  (opção 11 para avaliar)"
         }
     }
 
     Write-Host ""
-}
-
-# ─────────────────────────────────────────────────────────────
-#  REGION: BACKUP / ROLLBACK SYSTEM
-# ─────────────────────────────────────────────────────────────
-
-function Backup-RegValue {
-    param([string]$Path, [string]$Name)
-    $key = "$Path||$Name"
-    if ($Script:Backup.ContainsKey($key)) { return }
-    try {
-        $existing = Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop
-        $Script:Backup[$key] = @{
-            Path    = $Path
-            Name    = $Name
-            Value   = $existing.$Name
-            Existed = $true
-            Kind    = (Get-Item $Path -ErrorAction Stop).GetValueKind($Name)
-        }
-    } catch {
-        $Script:Backup[$key] = @{
-            Path    = $Path
-            Name    = $Name
-            Value   = $null
-            Existed = $false
-            Kind    = 'DWord'
-        }
-    }
-}
-
-function Set-RegSafe {
-    param(
-        [string]$Path,
-        [string]$Name,
-        $Value,
-        [string]$Type = 'DWord'
-    )
-    Backup-RegValue -Path $Path -Name $Name
-    try {
-        if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
-        Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force
-        return $true
-    } catch {
-        Write-WARN "Falha ao escrever $Path\$Name — $_"
-        return $false
-    }
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -381,14 +344,15 @@ function Disable-SysMain {
     try {
         $svc     = Get-Service -Name 'SysMain' -ErrorAction Stop
         $svcPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain'
-        Backup-RegValue -Path $svcPath -Name 'Start'
-        Set-ItemProperty -Path $svcPath -Name 'Start' -Value 4 -Type DWord -Force
+        $changed = Set-RegSafe -Path $svcPath -Name 'Start' -Value 4 -Type DWord
 
-        if ($svc.Status -eq 'Running') {
+        if ($changed -and $svc.Status -eq 'Running') {
             Stop-Service -Name 'SysMain' -Force -ErrorAction SilentlyContinue
             Write-OK "SysMain parado e desativado"
-        } else {
+        } elseif ($changed) {
             Write-OK "SysMain desativado (já estava parado)"
+        } else {
+            Write-WARN "SysMain não pôde ser desativado"
         }
         Write-INFO "I/O em background reduzido durante gameplay"
     } catch {
@@ -526,10 +490,10 @@ function Set-ExtraOptimizations {
     try {
         $diagPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\DiagTrack'
         if (Test-Path $diagPath) {
-            Backup-RegValue -Path $diagPath -Name 'Start'
-            Set-ItemProperty -Path $diagPath -Name 'Start' -Value 4 -Type DWord -Force
-            Stop-Service -Name 'DiagTrack' -Force -ErrorAction SilentlyContinue
-            Write-OK "DiagTrack (telemetria) → DESATIVADO"
+            if (Set-RegSafe -Path $diagPath -Name 'Start' -Value 4 -Type DWord) {
+                Stop-Service -Name 'DiagTrack' -Force -ErrorAction SilentlyContinue
+                Write-OK "DiagTrack (telemetria) → DESATIVADO"
+            }
         }
     } catch { Write-WARN "DiagTrack: $_" }
 
@@ -542,11 +506,9 @@ function Set-ExtraOptimizations {
         foreach ($nic in $nics) {
             $ip = (Get-ItemProperty -Path $nic.PSPath -ErrorAction SilentlyContinue).DhcpIPAddress
             if ($ip -and $ip -notmatch '^0\.' -and $ip -ne '') {
-                Backup-RegValue -Path $nic.PSPath -Name 'TcpAckFrequency'
-                Backup-RegValue -Path $nic.PSPath -Name 'TCPNoDelay'
-                Set-ItemProperty -Path $nic.PSPath -Name 'TcpAckFrequency' -Value 1 -Type DWord -Force
-                Set-ItemProperty -Path $nic.PSPath -Name 'TCPNoDelay'      -Value 1 -Type DWord -Force
-                $count++
+                $ackOk   = Set-RegSafe -Path $nic.PSPath -Name 'TcpAckFrequency' -Value 1 -Type DWord
+                $delayOk = Set-RegSafe -Path $nic.PSPath -Name 'TCPNoDelay'      -Value 1 -Type DWord
+                if ($ackOk -and $delayOk) { $count++ }
             }
         }
         if (Set-RegSafe -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name 'TCPNoDelay' -Value 1) {
@@ -754,9 +716,9 @@ function Set-GPUOptimizations {
 # ══════════════════════════════════════════════════════════════
 #  OPT 11 — WINDOWS 11: DESATIVAR VBS/HVCI (NOVO v2.0)
 #  Virtualization Based Security usa um hypervisor para proteger
-#  memória do kernel. O overhead pode ser de 5-15% em FPS em
-#  jogos CPU-bound (ex.: Tarkov, Minecraft, simuladores).
-#  HVCI (Hypervisor Protected Code Integrity) tem impacto similar.
+#  memória do kernel. Pode afetar desempenho em alguns cenários,
+#  mas é uma proteção de segurança e precisa de benchmark real.
+#  HVCI (Hypervisor Protected Code Integrity) faz parte desse tradeoff.
 #  ATENÇÃO: reduz uma camada de segurança. Recomendado APENAS
 #  para PCs dedicados a gaming, não corporativos.
 # ══════════════════════════════════════════════════════════════
@@ -890,7 +852,7 @@ function Get-OptimizationScore {
         $vbs = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -Name 'EnableVirtualizationBasedSecurity' -ErrorAction SilentlyContinue).EnableVirtualizationBasedSecurity
         if ($vbs -eq 0) {
             $score += 15; $items += "[+15] VBS: desativado"
-        } else { $items += "[ 0] VBS: ativo — impacto de FPS (use opção 11)" }
+        } else { $items += "[ 0] VBS: ativo — segurança habilitada; avalie opção 11" }
         $max = 100
     } else {
         # Sem Win11, redistribui os 15pts
@@ -932,7 +894,7 @@ function Show-Benchmark {
 
     Write-Host ""
     $grade = switch ($true) {
-        ($result.Score -ge 90) { "S — MÁXIMA PERFORMANCE" ; break }
+        ($result.Score -ge 90) { "S — CONFIGURAÇÃO COMPETITIVA" ; break }
         ($result.Score -ge 75) { "A — MUITO BOM"          ; break }
         ($result.Score -ge 55) { "B — BOM"                ; break }
         ($result.Score -ge 35) { "C — BÁSICO"             ; break }
@@ -964,7 +926,7 @@ function Show-ProfileMenu {
     Write-Host ""
     Write-Color "  [1] Gaming    — Todas as otimizações (recomendado para desktop)" -FG Cyan
     Write-Color "  [2] Balanced  — Otimizações seguras sem desativar serviços" -FG Cyan
-    Write-Color "  [3] Competitive — Gaming + Timer + Disco + GPU (máxima performance)" -FG Yellow
+    Write-Color "  [3] Competitive — Gaming + Timer + Disco + GPU (perfil avançado)" -FG Yellow
     Write-Color "  [4] Laptop    — Otimizações que mantêm vida da bateria" -FG Green
     Write-Color "  [0] Voltar" -FG DarkGray
     Write-Host ""
@@ -1016,8 +978,8 @@ function Invoke-AllOptimizations {
     try {
         Enable-ComputerRestore -Drive 'C:\' -ErrorAction SilentlyContinue
         $srKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
-        Set-ItemProperty -Path $srKey -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-        Checkpoint-Computer -Description "OtimizadorFPS v2 — Pre-Optimization $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        Set-RegSafe -Path $srKey -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type DWord | Out-Null
+        Checkpoint-Computer -Description "OtimizadorFPS v$Script:VERSION — Pre-Optimization $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
         Write-OK "Ponto de restauração criado com sucesso"
     } catch {
         Write-WARN "Ponto de restauração falhou (continuando): $_"
@@ -1066,19 +1028,15 @@ function Invoke-RestoreDefaults {
         $entry = $Script:Backup[$key]
         try {
             if (-not $entry.Existed) {
-                Remove-ItemProperty -Path $entry.Path -Name $entry.Name -Force -ErrorAction SilentlyContinue
+                $current = Get-ItemProperty -Path $entry.Path -Name $entry.Name -ErrorAction SilentlyContinue
+                if ($null -ne $current) {
+                    Remove-ItemProperty -Path $entry.Path -Name $entry.Name -Force -ErrorAction Stop
+                }
                 Write-OK "Removido (era novo): ...\$($entry.Name)"
             } else {
-                $kind = switch ($entry.Kind.ToString()) {
-                    'String'       { 'String' }
-                    'ExpandString' { 'ExpandString' }
-                    'DWord'        { 'DWord' }
-                    'QWord'        { 'QWord' }
-                    'MultiString'  { 'MultiString' }
-                    default        { 'DWord' }
-                }
-                if (-not (Test-Path $entry.Path)) { New-Item -Path $entry.Path -Force | Out-Null }
-                Set-ItemProperty -Path $entry.Path -Name $entry.Name -Value $entry.Value -Type $kind -Force
+                $kind = Normalize-RegKind $entry.Kind
+                if (-not (Test-Path $entry.Path)) { New-Item -Path $entry.Path -Force -ErrorAction Stop | Out-Null }
+                New-ItemProperty -Path $entry.Path -Name $entry.Name -Value $entry.Value -PropertyType $kind -Force -ErrorAction Stop | Out-Null
                 Write-OK "Restaurado: ...\$($entry.Name) = $($entry.Value)"
             }
             $ok++
@@ -1094,7 +1052,7 @@ function Invoke-RestoreDefaults {
         try {
             $svcPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$svcName"
             if (Test-Path $svcPath) {
-                Set-ItemProperty -Path $svcPath -Name 'Start' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
+                New-ItemProperty -Path $svcPath -Name 'Start' -Value 2 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
                 Start-Service -Name $svcName -ErrorAction SilentlyContinue
                 Write-OK "$svcName → REATIVADO"
             }
@@ -1120,8 +1078,11 @@ function Invoke-RestoreDefaults {
     Write-Host ""
     if ($fail -eq 0) {
         Write-Color "  ✅  Restauração completa — $ok valores revertidos" -FG Green
+        $Script:Backup = @{}
+        Clear-BackupState
     } else {
         Write-Color "  ⚠  Restauração parcial — $ok OK | $fail falhas" -FG Yellow
+        Save-BackupState
     }
     Write-INFO "Reiniciar o PC é recomendado para efeito completo"
     Write-Log "RESTORE: $ok revertidos, $fail falhas"
@@ -1150,7 +1111,7 @@ function Show-Menu {
         @{ N='8';  Label='Timer Resolution (frametime estável)';          Color='Cyan'    }
         @{ N='9';  Label='Otimizações de disco (NTFS + TRIM + cache)';    Color='Cyan'    }
         @{ N='10'; Label='GPU vendor-specific (NVIDIA/AMD/Intel)';        Color='Cyan'    }
-        @{ N='11'; Label='Windows 11: desativar VBS/HVCI (+5-15% FPS)';  Color='Yellow'  }
+        @{ N='11'; Label='Windows 11: avaliar tradeoff VBS/HVCI';        Color='Yellow'  }
         @{ N='12'; Label='Memória: LargeSystemCache + Heap tweaks';       Color='Cyan'    }
         @{ N='';   Label=''; Color='' }
         @{ N='A';  Label='APLICAR TODAS AS OTIMIZAÇÕES';                  Color='Green'   }
@@ -1175,7 +1136,7 @@ function Show-Menu {
 
     Write-Host ""
     Write-Color "  $('─' * 62)" -FG DarkGray
-    Write-Color "  Tweaks aplicados nesta sessão: " -FG DarkGray -NoNewLine
+    Write-Color "  Tweaks com backup: " -FG DarkGray -NoNewLine
     Write-Color "$($Script:Backup.Count)" -FG $(if ($Script:Backup.Count -gt 0) { 'Yellow' } else { 'DarkGray' }) -NoNewLine
     Write-Color "  |  Log: $Script:LOG_FILE" -FG DarkGray
     Write-Host ""
@@ -1184,11 +1145,14 @@ function Show-Menu {
 
 function Start-MainLoop {
     Assert-Admin
-    $Script:Backup = @{}
+    $Script:Backup = Load-BackupState
 
     # Registra score inicial automaticamente
     $Script:BenchScore = (Get-OptimizationScore).Score
     Write-Log "=== SESSÃO INICIADA: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | Score inicial: $Script:BenchScore ==="
+    if ($Script:Backup.Count -gt 0) {
+        Write-Log "BACKUP: $($Script:Backup.Count) item(ns) carregado(s) de $Script:BACKUP_FILE"
+    }
 
     while ($true) {
         Show-Menu
@@ -1217,7 +1181,7 @@ function Start-MainLoop {
                 Write-Host ""
                 Write-Color "  Saindo do OtimizadorFPS v$Script:VERSION..." -FG DarkCyan
                 if ($Script:Backup.Count -gt 0) {
-                    Write-WARN "$($Script:Backup.Count) alterações aplicadas nesta sessão."
+                    Write-WARN "$($Script:Backup.Count) alteração(ões) com backup pendente."
                     Write-INFO "Abra novamente e use [R] para restaurar se necessário."
                 }
                 $finalScore = (Get-OptimizationScore).Score
@@ -1266,7 +1230,7 @@ Write-Color "  ║  ██    ██    ██    ██ ██  ████  �
 Write-Color "  ║   ██████     ██    ██ ██   ███  ██ ███████  ██████  ██   ██ ║" -FG Cyan
 Write-Color "  ║                                                              ║" -FG Cyan
 Write-Color "  ║      FPS  ·  INPUT LAG  ·  FRAMETIME  ·  LATÊNCIA           ║" -FG DarkCyan
-Write-Color "  ║      Windows 10/11 Gaming Optimizer  v2.0                   ║" -FG DarkCyan
+Write-Color "  ║      Windows 10/11 Gaming Optimizer  v2.1.0                 ║" -FG DarkCyan
 Write-Color "  ╚══════════════════════════════════════════════════════════════╝" -FG Cyan
 Write-Host ""
 Write-Color "  + Timer Resolution  + Disk Tweaks  + GPU Vendor Detection     " -FG DarkGray

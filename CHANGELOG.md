@@ -14,13 +14,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Security policy, contribution guide, MIT license, issue templates and CI workflow.
 
 ### Fixed
-- Registry writes now use a safe `RegistryKey.SetValue()` helper instead of the invalid `Set-ItemProperty -Type` pattern.
+- Registry writes now use a safe `New-ItemProperty -PropertyType` helper instead of the invalid `Set-ItemProperty -Type` pattern.
 - Script saved as UTF-8 with BOM for Windows PowerShell 5.1 compatibility.
 - Windows 11 VBS/HVCI warning now points to menu option 11.
 
 ### Changed
 - README rewritten with professional positioning, safety model, roadmap and references.
 - Rollback state now loads on startup and is cleared after a successful restore.
+- VBS/HVCI menu text no longer promises fixed FPS gains and frames the change as a security/performance tradeoff.
+- Backup and registry helpers moved into `src/Core/` as the first step toward modular PowerShell structure.
 
 ## [2.0.0] — 2024
 

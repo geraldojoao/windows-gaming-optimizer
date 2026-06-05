@@ -10,6 +10,7 @@ The project is currently a PowerShell CLI with:
 - Restore point creation for bulk apply.
 - Persistent logging.
 - Synthetic optimization score.
+- Extracted core helper scripts under `src/Core/` for backup and registry work.
 
 Recent hardening added:
 
@@ -17,6 +18,7 @@ Recent hardening added:
 - UTF-8 with BOM compatibility for Windows PowerShell 5.1.
 - A registry writer that preserves value kinds correctly.
 - Persistent backup at `~/Documents/OtimizadorFPS_backup.json`.
+- Backup and registry helpers extracted from the main script.
 - Correct VBS/HVCI menu reference.
 
 ## Main Technical Risks
@@ -193,8 +195,9 @@ if you want a modern frontend-heavy portfolio piece.
 ## Next Engineering Milestones
 
 1. Add `-DryRun` and `-WhatIf` support.
-2. Extract registry/backup helpers into module.
-3. Add Pester tests for backup and scoring.
-4. Add tweak catalog with risk levels.
+2. Add `Invoke-SafeChange` for risk, confirmation, apply, verify and rollback.
+3. Expand rollback to services, powercfg, bcdedit and hibernation.
+4. Add Pester tests for backup, registry helpers, scoring and dry-run.
 5. Add PresentMon benchmark command.
-6. Build desktop prototype with audit dashboard.
+6. Extract low-risk tweaks into `src/Tweaks/`.
+7. Build desktop prototype with audit dashboard.

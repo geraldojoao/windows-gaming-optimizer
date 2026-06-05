@@ -19,6 +19,9 @@ shows the current system state, applies focused Windows tweaks and keeps a
 persistent rollback file so the user can reverse registry changes even after
 closing the app.
 
+The current menu benchmark is a configuration score, not proof of FPS gain.
+Measured performance work remains part of the roadmap.
+
 The project is intentionally positioned as a technical portfolio product:
 Windows internals, system automation, safety-first UX, performance diagnostics,
 documentation and a clear roadmap toward a full desktop application.
@@ -50,6 +53,8 @@ Main files:
 
 - `OtimizadorFPS.ps1`: stable launcher.
 - `OtimizadorFPS_v2.ps1`: current implementation.
+- `src/Core/Backup.ps1`: persistent backup and rollback state helpers.
+- `src/Core/Registry.ps1`: safe registry writer with backup support.
 - `CHANGELOG.md`: release notes.
 - `docs/`: product, architecture and design strategy.
 
